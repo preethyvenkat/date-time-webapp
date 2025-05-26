@@ -1,0 +1,48 @@
+# === Terraform ===
+*.tfstate
+*.tfstate.*
+.crash.log
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# === Docker ===
+**/.docker/
+**/Dockerfile.*
+docker-compose.override.yml
+
+# === Jenkins ===
+jenkins_home/
+secrets/
+init.groovy.d/
+*.jenkinsfile.bak
+*.jenkins.log
+
+# === Flask / Python ===
+*.pyc
+__pycache__/
+instance/
+.env
+.env.*
+*.sqlite3
+*.db
+
+# === Argo CD ===
+# Argo CD doesn't store secrets in your repo, but in case:
+.argocd/
+argocd-config/
+*.yaml.bak
+
+# === General ===
+*.log
+*.tmp
+*.swp
+*.bak
+*.DS_Store
+.idea/
+.vscode/
+*.iml
