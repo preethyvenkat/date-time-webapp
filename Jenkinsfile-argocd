@@ -2,12 +2,15 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION    = 'us-east-1'
-        EKS_CLUSTER   = 'arm64-eks-cluster'
-        MANIFEST_REPO = 'git@github.com:preethyvenkat/date-time-webapp.git'
-        ARGO_APP_NAME = 'date-time-webapp'
-        ARGO_NAMESPACE = 'argocd'
-        SSH_CREDENTIALS_ID = 'github-creds'  // Jenkins SSH key credential for GitHub repo access
+        AWS_REGION       = 'us-east-1'
+        EKS_CLUSTER      = 'date-time-webapp-cluster'
+        MANIFEST_REPO    = 'git@github.com:preethyvenkat/date-time-webapp.git'
+        ARGO_APP_NAME    = 'date-time-webapp'
+        ARGO_NAMESPACE   = 'argocd'
+        SSH_DEPLOY_KEY   = 'argo-ssh-key'      // Jenkins SSH key for ArgoCD secret
+        SSH_GIT_KEY      = 'github-creds'      // Jenkins SSH key for git push/pull
+        ECR_REPO         = '141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp'
+        IMAGE_TAG        = "v${BUILD_NUMBER}"
     }
 
     stages {
@@ -35,49 +38,63 @@ pipeline {
                     kubectl get pods -n $ARGO_NAMESPACE | grep argocd-server || \
                     kubectl apply -n $ARGO_NAMESPACE -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-                    # Wait for argocd-server to be ready
-                    until kubectl get pods -n $ARGO_NAMESPACE | grep argocd-server | grep -q Running; do
-                        echo "Waiting for Argo CD server pod..."
-                        sleep 10
-                    done
+                    echo "⏳ Waiting for Argo CD server pod to be ready..."
+                    kubectl rollout status deployment/argocd-server -n $ARGO_NAMESPACE --timeout=300s
                 '''
             }
         }
 
-        stage('Add SSH Key for Git Access') {
+        stage('Configure Argo CD Git Access') {
             steps {
-                sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                withCredentials([file(credentialsId: SSH_DEPLOY_KEY, variable: 'SSH_KEY')]) {
                     sh '''
-                        echo "Using SSH key from Jenkins credentials for Git operations"
-                        # Testing git clone access (optional)
-                        git ls-remote $MANIFEST_REPO
+                        kubectl -n $ARGO_NAMESPACE delete secret argocd-ssh-key || true
+                        kubectl -n $ARGO_NAMESPACE create secret generic argocd-ssh-key --from-file=ssh-privatekey=$SSH_KEY --type=kubernetes.io/ssh-auth
                     '''
                 }
+            }
+        }
+
+        stage('Expose Argo CD via LoadBalancer') {
+            steps {
+                sh '''
+                    kubectl patch svc argocd-server -n $ARGO_NAMESPACE -p '{"spec": {"type": "LoadBalancer"}}'
+
+                    echo "⏳ Waiting for LoadBalancer external IP..."
+                    for i in {1..20}; do
+                        ARGO_URL=$(kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                        if [ ! -z "$ARGO_URL" ]; then
+                            echo "Argo CD is accessible at: http://$ARGO_URL"
+                            break
+                        fi
+                        echo "Waiting for external IP..."
+                        sleep 15
+                    done
+                '''
             }
         }
 
         stage('Create or Update Argo CD Application') {
             steps {
                 sh '''
-                    # Check if Argo CD CLI is installed; install if missing
                     if ! command -v argocd &> /dev/null; then
-                        echo "Installing Argo CD CLI..."
                         curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
                         chmod +x /usr/local/bin/argocd
                     fi
 
-                    # Login to Argo CD server (assumes default admin + known password or token)
-                    # Replace this with your real Argo CD admin password or token management
-                    ARGCD_SERVER=argocd-server.$ARGO_NAMESPACE.svc.cluster.local:443
-                    argocd login $ARGCD_SERVER --insecure --username admin --password $(kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+                    ARGCD_SERVER=$(kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                    ARGOCD_PASSWORD=$(kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
 
-                    # Create or update app
+                    argocd login $ARGCD_SERVER --insecure --username admin --password $ARGOCD_PASSWORD
+
                     if argocd app get $ARGO_APP_NAME > /dev/null 2>&1; then
-                        echo "Updating Argo CD app $ARGO_APP_NAME"
-                        argocd app set $ARGO_APP_NAME --repo $MANIFEST_REPO --path k8s --dest-server https://kubernetes.default.svc --dest-namespace default
+                        argocd app set $ARGO_APP_NAME \
+                            --repo $MANIFEST_REPO \
+                            --path k8s \
+                            --dest-server https://kubernetes.default.svc \
+                            --dest-namespace default
                         argocd app sync $ARGO_APP_NAME
                     else
-                        echo "Creating Argo CD app $ARGO_APP_NAME"
                         argocd app create $ARGO_APP_NAME \
                             --repo $MANIFEST_REPO \
                             --path k8s \
@@ -86,7 +103,6 @@ pipeline {
                             --sync-policy automated
                     fi
 
-                    # Wait for sync to complete
                     argocd app wait $ARGO_APP_NAME --health --timeout 300
                 '''
             }
@@ -94,15 +110,13 @@ pipeline {
 
         stage('Update Manifests in Git Repo') {
             steps {
-                sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                sshagent(credentials: [SSH_GIT_KEY]) {
                     sh '''
-                        set -e
                         rm -rf manifests
                         git clone $MANIFEST_REPO manifests
                         cd manifests
                         git pull --rebase origin main
 
-                        # Example: Update image in deployment.yaml (adjust path if needed)
                         sed -i'' "s|image: .*|image: $ECR_REPO:$IMAGE_TAG|" k8s/deployment.yaml
 
                         git config user.email "preevenkat@gmail.com"
@@ -123,15 +137,12 @@ pipeline {
 
     post {
         success {
-            echo '🎉 Argo CD pipeline completed successfully!'
-            slackSend(color: '#36a64f', message: "*✅ SUCCESS*: Argo CD pipeline `${env.JOB_NAME}` #${env.BUILD_NUMBER} completed.")
+            slackSend(color: '#36a64f', message: "*✅ SUCCESS*: Pipeline `${env.JOB_NAME}` #${env.BUILD_NUMBER} completed.")
         }
         failure {
-            echo '❌ Argo CD pipeline failed.'
-            slackSend(color: '#FF0000', message: "*❌ FAILURE*: Argo CD pipeline `${env.JOB_NAME}` #${env.BUILD_NUMBER} failed.")
+            slackSend(color: '#FF0000', message: "*❌ FAILURE*: Pipeline `${env.JOB_NAME}` #${env.BUILD_NUMBER} failed.")
         }
         cleanup {
-            echo '🧹 Cleaning up workspace...'
             deleteDir()
         }
     }

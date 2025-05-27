@@ -6,12 +6,9 @@ pipeline {
         ECR_REPO     = '141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp'
         IMAGE_TAG    = "v${BUILD_NUMBER}"
         FULL_IMAGE   = "${ECR_REPO}:${IMAGE_TAG}"
-        MANIFEST_REPO = 'git@github.com:preethyvenkat/date-time-webapp.git'
-        TF_DIR       = 'infrastructure/terraform-eks-cluster'
     }
 
     stages {
-
         stage('Build Docker Image') {
             steps {
                 sh '''
@@ -58,110 +55,35 @@ pipeline {
             }
         }
 
-        stage('Tag Docker Image') {
+        stage('Tag and Push Docker Image') {
             steps {
                 sh '''
                     echo "🔖 Tagging Docker image: $FULL_IMAGE"
                     docker tag $FULL_IMAGE $ECR_REPO:$IMAGE_TAG
+                    docker push $FULL_IMAGE
                 '''
             }
         }
-
-        stage('Push Docker Image to ECR') {
-            steps {
-                sh 'docker push $FULL_IMAGE'
-            }
-        }
-
-        stage('Terraform Init and Plan') {
-            steps {
-                dir("${TF_DIR}") {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'aws-creds',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )]) {
-                        withEnv([
-                            "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID",
-                            "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
-                        ]) {
-                            sh '''
-                                terraform init
-                                terraform plan -out=tfplan
-                                echo "✅ Terraform plan created"
-                            '''
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Terraform Apply (EKS)') {
-            steps {
-                dir("${TF_DIR}") {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'aws-creds',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )]) {
-                        withEnv([
-                            "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID",
-                            "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
-                        ]) {
-                            sh '''
-                                terraform apply -auto-approve tfplan
-                                echo "✅ Terraform applied successfully"
-                            '''
-                        }
-                    }
-                }
-            }
-        }
-
     }
+
     post {
-    success {
-        echo '🎉 Pipeline completed successfully!'
-        slackSend (
-            color: '#36a64f', // green
-            message: "*✅ SUCCESS*: The pipeline `${env.JOB_NAME}` #${env.BUILD_NUMBER} completed successfully. 🚀"
-        )
-    }
-
-    failure {
-        echo '❌ Pipeline failed.'
-
-        // Send separate Slack alerts for CI and Infra stages (manually marked)
-        script {
-            def ciFailed = currentBuild.rawBuild.getLog().any { it.contains("CI_STAGE_FAILED") }
-            def infraFailed = currentBuild.rawBuild.getLog().any { it.contains("INFRA_STAGE_FAILED") }
-
-            if (ciFailed) {
-                slackSend (
-                    color: '#FF0000', // red
-                    message: "*❌ CI FAILURE*: Build `${env.BUILD_NUMBER}` failed during the CI stage. 🔧"
-                )
-            }
-
-            if (infraFailed) {
-                slackSend (
-                    color: '#0000FF', // blue
-                    message: "*❌ INFRA FAILURE*: Build `${env.BUILD_NUMBER}` failed during the Infrastructure stage. 🏗️"
-                )
-            }
-
-            // Fallback if we don't know which stage failed
-            if (!ciFailed && !infraFailed) {
-                slackSend (
-                    color: '#FF0000',
-                    message: "*❌ FAILURE*: The pipeline `${env.JOB_NAME}` #${env.BUILD_NUMBER} failed. ❗"
-                )
-            }
+        success {
+            echo '🎉 CI pipeline completed successfully!'
+            slackSend (
+                color: '#36a64f',
+                message: "*✅ CI SUCCESS*: Docker image pushed for `${env.JOB_NAME}` #${env.BUILD_NUMBER} 🚀"
+            )
         }
-    }
-
-    cleanup {
-        echo '🧹 Cleaning up workspace...'
-        deleteDir()
+        failure {
+            echo '❌ CI pipeline failed.'
+            slackSend (
+                color: '#FF0000',
+                message: "*❌ CI FAILURE*: Docker build or push failed in `${env.JOB_NAME}` #${env.BUILD_NUMBER} 🔧"
+            )
+        }
+        cleanup {
+            echo '🧹 Cleaning CI workspace...'
+            deleteDir()
+        }
     }
 }

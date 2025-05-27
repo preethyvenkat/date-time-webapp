@@ -1,0 +1,76 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = 'us-east-1'
+        TF_DIR     = 'infrastructure/terraform-eks-cluster'
+    }
+
+    stages {
+        stage('Terraform Init and Plan') {
+            steps {
+                dir("${TF_DIR}") {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
+                        withEnv([
+                            "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID",
+                            "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+                        ]) {
+                            sh '''
+                                terraform init
+                                terraform plan -out=tfplan
+                                echo "✅ Terraform plan created"
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Apply (EKS)') {
+            steps {
+                dir("${TF_DIR}") {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
+                        withEnv([
+                            "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID",
+                            "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+                        ]) {
+                            sh '''
+                                terraform apply -auto-approve tfplan
+                                echo "✅ Terraform applied successfully"
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '🎉 EKS infrastructure applied successfully!'
+            slackSend (
+                color: '#36a64f',
+                message: "*✅ INFRA SUCCESS*: Terraform EKS applied for `${env.JOB_NAME}` #${env.BUILD_NUMBER} 🚀"
+            )
+        }
+        failure {
+            echo '❌ EKS infrastructure apply failed.'
+            slackSend (
+                color: '#0000FF',
+                message: "*❌ INFRA FAILURE*: Terraform failed for `${env.JOB_NAME}` #${env.BUILD_NUMBER} 🏗️"
+            )
+        }
+        cleanup {
+            echo '🧹 Cleaning Infra workspace...'
+            deleteDir()
+        }
+    }
+}

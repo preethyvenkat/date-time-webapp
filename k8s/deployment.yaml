@@ -30,11 +30,10 @@ kind: Service
 metadata:
   name: date-time-service
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: date-time
-    ports:
+  ports:
     - protocol: TCP
       port: 80
       targetPort: 8080
-      NodePort: 31122
