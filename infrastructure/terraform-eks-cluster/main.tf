@@ -48,7 +48,7 @@ resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
 # 3. EKS Cluster
 resource "aws_eks_cluster" "eks" {
   name     = "date-time-webapp-cluster"
-  version  = "1.21"
+  version  = "1.31"
   role_arn = aws_iam_role.eks_cluster_role.arn
 
   vpc_config {
