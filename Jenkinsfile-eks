@@ -62,7 +62,27 @@ pipeline {
             )
         }
         failure {
-            echo '❌ EKS infrastructure apply failed.'
+            echo '❌ Pipeline failed. Triggering terraform destroy.'
+
+            // Terraform destroy (wrap in try-catch to avoid pipeline crash if destroy fails)
+            script {
+                try {
+                    dir('infrastructure/terraform-eks-cluster') {
+                        withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                            sh '''
+                                export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+                                export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+                                export AWS_REGION=us-east-1
+
+                                terraform init -input=false
+                                terraform destroy -auto-approve
+                            '''
+                        }
+                    }
+                } catch (err) {
+                    echo "⚠️ Terraform destroy failed: ${err}"
+                }
+            }
             slackSend (
                 color: '#0000FF',
                 message: "*❌ INFRA FAILURE*: Terraform failed for `${env.JOB_NAME}` #${env.BUILD_NUMBER} 🏗️"
