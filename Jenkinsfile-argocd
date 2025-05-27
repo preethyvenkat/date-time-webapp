@@ -1,0 +1,138 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION    = 'us-east-1'
+        EKS_CLUSTER   = 'arm64-eks-cluster'
+        MANIFEST_REPO = 'git@github.com:preethyvenkat/date-time-webapp.git'
+        ARGO_APP_NAME = 'date-time-webapp'
+        ARGO_NAMESPACE = 'argocd'
+        SSH_CREDENTIALS_ID = 'github-creds'  // Jenkins SSH key credential for GitHub repo access
+    }
+
+    stages {
+        stage('Setup kubeconfig for EKS') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    sh '''
+                        mkdir -p ~/.aws
+                        echo "[default]" > ~/.aws/credentials
+                        echo "aws_access_key_id=$AWS_ACCESS_KEY_ID" >> ~/.aws/credentials
+                        echo "aws_secret_access_key=$AWS_SECRET_ACCESS_KEY" >> ~/.aws/credentials
+                        echo "[default]" > ~/.aws/config
+                        echo "region=$AWS_REGION" >> ~/.aws/config
+
+                        aws eks update-kubeconfig --region $AWS_REGION --name $EKS_CLUSTER
+                    '''
+                }
+            }
+        }
+
+        stage('Install Argo CD') {
+            steps {
+                sh '''
+                    kubectl get namespace $ARGO_NAMESPACE || kubectl create namespace $ARGO_NAMESPACE
+                    kubectl get pods -n $ARGO_NAMESPACE | grep argocd-server || \
+                    kubectl apply -n $ARGO_NAMESPACE -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+                    # Wait for argocd-server to be ready
+                    until kubectl get pods -n $ARGO_NAMESPACE | grep argocd-server | grep -q Running; do
+                        echo "Waiting for Argo CD server pod..."
+                        sleep 10
+                    done
+                '''
+            }
+        }
+
+        stage('Add SSH Key for Git Access') {
+            steps {
+                sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                    sh '''
+                        echo "Using SSH key from Jenkins credentials for Git operations"
+                        # Testing git clone access (optional)
+                        git ls-remote $MANIFEST_REPO
+                    '''
+                }
+            }
+        }
+
+        stage('Create or Update Argo CD Application') {
+            steps {
+                sh '''
+                    # Check if Argo CD CLI is installed; install if missing
+                    if ! command -v argocd &> /dev/null; then
+                        echo "Installing Argo CD CLI..."
+                        curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+                        chmod +x /usr/local/bin/argocd
+                    fi
+
+                    # Login to Argo CD server (assumes default admin + known password or token)
+                    # Replace this with your real Argo CD admin password or token management
+                    ARGCD_SERVER=argocd-server.$ARGO_NAMESPACE.svc.cluster.local:443
+                    argocd login $ARGCD_SERVER --insecure --username admin --password $(kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+
+                    # Create or update app
+                    if argocd app get $ARGO_APP_NAME > /dev/null 2>&1; then
+                        echo "Updating Argo CD app $ARGO_APP_NAME"
+                        argocd app set $ARGO_APP_NAME --repo $MANIFEST_REPO --path k8s --dest-server https://kubernetes.default.svc --dest-namespace default
+                        argocd app sync $ARGO_APP_NAME
+                    else
+                        echo "Creating Argo CD app $ARGO_APP_NAME"
+                        argocd app create $ARGO_APP_NAME \
+                            --repo $MANIFEST_REPO \
+                            --path k8s \
+                            --dest-server https://kubernetes.default.svc \
+                            --dest-namespace default \
+                            --sync-policy automated
+                    fi
+
+                    # Wait for sync to complete
+                    argocd app wait $ARGO_APP_NAME --health --timeout 300
+                '''
+            }
+        }
+
+        stage('Update Manifests in Git Repo') {
+            steps {
+                sshagent(credentials: [SSH_CREDENTIALS_ID]) {
+                    sh '''
+                        set -e
+                        rm -rf manifests
+                        git clone $MANIFEST_REPO manifests
+                        cd manifests
+                        git pull --rebase origin main
+
+                        # Example: Update image in deployment.yaml (adjust path if needed)
+                        sed -i'' "s|image: .*|image: $ECR_REPO:$IMAGE_TAG|" k8s/deployment.yaml
+
+                        git config user.email "preevenkat@gmail.com"
+                        git config user.name "Preethy Venkat"
+
+                        if git diff --quiet; then
+                            echo "No changes to commit"
+                        else
+                            git add k8s/deployment.yaml
+                            git commit -m "Update image to $IMAGE_TAG"
+                            git push origin main
+                        fi
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '🎉 Argo CD pipeline completed successfully!'
+            slackSend(color: '#36a64f', message: "*✅ SUCCESS*: Argo CD pipeline `${env.JOB_NAME}` #${env.BUILD_NUMBER} completed.")
+        }
+        failure {
+            echo '❌ Argo CD pipeline failed.'
+            slackSend(color: '#FF0000', message: "*❌ FAILURE*: Argo CD pipeline `${env.JOB_NAME}` #${env.BUILD_NUMBER} failed.")
+        }
+        cleanup {
+            echo '🧹 Cleaning up workspace...'
+            deleteDir()
+        }
+    }
+}
