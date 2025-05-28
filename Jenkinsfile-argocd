@@ -93,7 +93,7 @@ pipeline {
             steps {
                 sh '''
                     if ! command -v argocd &> /dev/null; then
-                        curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+                        curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-arm64
                         chmod +x /usr/local/bin/argocd
                     fi
 
