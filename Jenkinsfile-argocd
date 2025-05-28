@@ -61,20 +61,31 @@ pipeline {
 
         stage('Expose Argo CD via LoadBalancer') {
             steps {
-                sh '''
-                    kubectl patch svc argocd-server -n $ARGO_NAMESPACE -p '{"spec": {"type": "LoadBalancer"}}'
+                script {
+                    sh '''
+                        set -e
+                        kubectl patch svc argocd-server -n $ARGO_NAMESPACE -p '{"spec": {"type": "LoadBalancer"}}'
 
-                    echo "⏳ Waiting for LoadBalancer external IP..."
-                    for i in {1..20}; do
-                        ARGO_URL=$(kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                        if [ ! -z "$ARGO_URL" ]; then
-                            echo "Argo CD is accessible at: http://$ARGO_URL"
+                        echo "⏳ Waiting for LoadBalancer external IP..."
+                        for i in {1..20}; do
+                            ARGO_URL=$(kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                            if [ ! -z "$ARGO_URL" ]; then
+                                echo "✅ Argo CD is accessible at: http://$ARGO_URL"
                             break
-                        fi
-                        echo "Waiting for external IP..."
+                            fi
+                        echo "Still waiting for external IP..."
                         sleep 15
-                    done
-                '''
+                        done
+
+                        # Optional: Fail if IP never appeared
+                        if [ -z "$ARGO_URL" ]; then
+                            echo "❌ Failed to get external IP after several attempts."
+                            exit 1
+                        fi
+                    '''
+                    env.ARGO_URL = sh(script: "kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'", returnStdout: true).trim()
+                    echo "Argo CD URL: ${env.ARGO_URL}"
+                }
             }
         }
 
