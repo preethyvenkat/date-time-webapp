@@ -18,7 +18,7 @@ spec:
     spec:  
       containers:
         - name: date-time-container
-          image: 141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp:latest
+          image: 141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp:v6
           ports:
           - containerPort: 8080
     
