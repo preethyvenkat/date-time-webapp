@@ -30,7 +30,7 @@ pipeline {
                     '''
                 }
             }
-        }
+       }
 
         stage('Install Argo CD') {
             steps {
@@ -43,7 +43,7 @@ pipeline {
                     kubectl rollout status deployment/argocd-server -n $ARGO_NAMESPACE --timeout=300s
                 '''
             }
-        } 
+        }
 
         stage('Configure Argo CD Git Access') {
             steps {
@@ -92,36 +92,37 @@ pipeline {
 
         stage('Create or Update Argo CD Application') {
             steps {
-                sh '''
-                    if ! command -v argocd &> /dev/null; then
-                        sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-arm64
-                        sudo chmod +x /usr/local/bin/argocd
-                    fi
+                withCredentials([string(credentialsId: 'argocd-token', variable: 'ARGOCD_AUTH_TOKEN')]) {
+                    sh '''
+                        if ! command -v argocd &> /dev/null; then
+                            sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-arm64
+                            sudo chmod +x /usr/local/bin/argocd
+                        fi
 
-                    ARGCD_SERVER=$(kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                    ARGOCD_PASSWORD=$(kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+                        ARGCD_SERVER=$(kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
-                    argocd login $ARGCD_SERVER --insecure --username admin --password $ARGOCD_PASSWORD
+                        argocd login $ARGCD_SERVER --insecure --auth-token $ARGOCD_AUTH_TOKEN
 
-                    if argocd app get $ARGO_APP_NAME > /dev/null 2>&1; then
-                        argocd app set $ARGO_APP_NAME \
-                            --repo $MANIFEST_REPO \
-                            --path k8s \
-                            --dest-server https://kubernetes.default.svc \
-                            --dest-namespace default
-                        argocd app sync $ARGO_APP_NAME
-                    else
-                        argocd app create $ARGO_APP_NAME \
-                            --repo $MANIFEST_REPO \
-                            --path k8s \
-                            --dest-server https://kubernetes.default.svc \
-                            --dest-namespace default \
-                            --sync-policy automated
-                    fi
+                        if argocd app get $ARGO_APP_NAME > /dev/null 2>&1; then
+                            argocd app set $ARGO_APP_NAME \
+                                --repo $MANIFEST_REPO \
+                                --path k8s \
+                                --dest-server https://kubernetes.default.svc \
+                                --dest-namespace default
+                                argocd app sync $ARGO_APP_NAME
+                        else
+                            argocd app create $ARGO_APP_NAME \
+                                --repo $MANIFEST_REPO \
+                                --path k8s \
+                                --dest-server https://kubernetes.default.svc \
+                                --dest-namespace default \
+                                --sync-policy automated
+                        fi
 
-                    argocd app wait $ARGO_APP_NAME --health --timeout 300
-                '''
-            }
+                        argocd app wait $ARGO_APP_NAME --health --timeout 300
+                    '''
+                    }
+                }
         }
 
         stage('Update Manifests in Git Repo') {
