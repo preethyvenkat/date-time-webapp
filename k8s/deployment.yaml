@@ -15,25 +15,12 @@ spec:
       labels:
         app: date-time
         env: prod
-      spec:
-        container:
-        - name: date-time-container
-          image: 141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp:latest
-          ports:
-          - containerPort: 8080
+  spec:
+    container:
+    - name: date-time-container
+      image: 141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp:latest
+      ports:
+      - containerPort: 8080
 
 
-# remove the below steps after initial deployment
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: date-time-service
-spec:
-  type: LoadBalancer
-  selector:
-    app: date-time
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 8080
+
