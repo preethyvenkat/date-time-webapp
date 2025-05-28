@@ -1,0 +1,41 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = 'us-east-1'
+    }
+
+    stages {
+        stage('Destroy EKS Cluster') {
+            steps {
+                script {
+                    def confirmDestroy = input(
+                        id: 'confirmDestroy', 
+                        message: 'Are you sure you want to destroy the EKS cluster?', 
+                        parameters: [booleanParam(defaultValue: false, description: 'Check to confirm destruction', name: 'Destroy')]
+                    )
+                    if (confirmDestroy) {
+                        withCredentials([usernamePassword(
+                            credentialsId: 'aws-creds',
+                            usernameVariable: 'AWS_ACCESS_KEY_ID',
+                            passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                        )]) {
+                            sh '''
+                                export AWS_REGION=${AWS_REGION}
+                                export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+                                export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+
+                                cd infrastructure/terraform-eks-cluster
+
+                                terraform init
+                                terraform destroy -auto-approve
+                            '''
+                        }
+                    } else {
+                        echo "Destroy cancelled by user."
+                    }
+                }
+            }
+        }
+    }
+}
