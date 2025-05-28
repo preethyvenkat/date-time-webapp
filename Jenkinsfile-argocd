@@ -92,52 +92,55 @@ pipeline {
 
         stage('Create or Update Argo CD Application') {
             steps {
-                 withCredentials([string(credentialsId: 'argocd-token', variable: 'ARGOCD_AUTH_TOKEN')]) {
-            sh ''' 
-                set -e  # Exit on error
-
-                # Download Argo CD CLI if not already present
+                withCredentials([
+            usernamePassword(credentialsId: 'argocd-login-creds', usernameVariable: 'ARGOCD_USERNAME', passwordVariable: 'ARGOCD_PASSWORD'),
+            usernamePassword(credentialsId: 'github-pat-creds', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PAT')
+        ]) {
+            sh '''
                 if ! command -v argocd &> /dev/null; then
-                    echo "🔧 Installing Argo CD CLI..."
                     sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-arm64
                     sudo chmod +x /usr/local/bin/argocd
                 fi
 
-                echo "🔍 Retrieving Argo CD server LoadBalancer address..."
-                ARGCD_SERVER=$(kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath="{.status.loadBalancer.ingress[0].hostname}")
-                echo "✅ Argo CD server: $ARGCD_SERVER"
+                export ARGO_NAMESPACE=argocd
+                export ARGO_APP_NAME=date-time-app
 
-                echo "🔐 Logging into Argo CD..."
-                argocd login "$ARGCD_SERVER" --insecure --auth-token "$ARGOCD_AUTH_TOKEN"
+                echo "🔍 Getting Argo CD server hostname..."
+                ARGCD_SERVER=$(kubectl get svc argocd-server -n $ARGO_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                
+                echo "🔐 Logging into Argo CD server using username/password..."
+                argocd login $ARGCD_SERVER --insecure --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD
 
-                echo "🚀 Creating or updating Argo CD application..."
-                if argocd app get "$ARGO_APP_NAME" > /dev/null 2>&1; then
-                    echo "🛠️  App exists. Updating..."
-                    argocd app set "$ARGO_APP_NAME" \
-                        --repo "$MANIFEST_REPO" \
-                        --path "k8s" \
-                        --dest-server "https://kubernetes.default.svc" \
-                        --dest-namespace "default"
+                echo "🔗 Adding Git repo to Argo CD (HTTPS with PAT)..."
+                argocd repo add https://github.com/$GIT_USERNAME/date-time-webapp.git \
+                    --username $GIT_USERNAME \
+                    --password $GIT_PAT \
+                    --insecure || echo "📁 Repo already added"
 
-                    argocd app sync "$ARGO_APP_NAME"
+                if argocd app get $ARGO_APP_NAME > /dev/null 2>&1; then
+                    echo "🔄 Updating existing Argo CD app..."
+                    argocd app set $ARGO_APP_NAME \
+                        --repo https://github.com/$GIT_USERNAME/date-time-webapp.git \
+                        --path k8s \
+                        --dest-server https://kubernetes.default.svc \
+                        --dest-namespace default
+                    argocd app sync $ARGO_APP_NAME
                 else
-                    echo "📦 App doesn't exist. Creating..."
-                    argocd app create "$ARGO_APP_NAME" \
-                        --repo "$MANIFEST_REPO" \
-                        --path "k8s" \
-                        --dest-server "https://kubernetes.default.svc" \
-                        --dest-namespace "default" \
+                    echo "🚀 Creating new Argo CD app..."
+                    argocd app create $ARGO_APP_NAME \
+                        --repo https://github.com/$GIT_USERNAME/date-time-webapp.git \
+                        --path k8s \
+                        --dest-server https://kubernetes.default.svc \
+                        --dest-namespace default \
                         --sync-policy automated
                 fi
 
-                echo "⏳ Waiting for Argo CD app to become healthy..."
-                argocd app wait "$ARGO_APP_NAME" --health --timeout 300
-                echo "✅ Argo CD application is healthy"
-                '''
-                    }
+                echo "⏳ Waiting for app to become healthy..."
+                argocd app wait $ARGO_APP_NAME --health --timeout 300
+            '''
                 }
-        }
-
+            }
+            }
         stage('Update Manifests in Git Repo') {
             steps {
                 sshagent(credentials: [SSH_GIT_KEY]) {
