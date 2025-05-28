@@ -21,6 +21,12 @@ multipass exec jenkins-gitops-vm -- bash -c "
   sudo systemctl start docker
   echo '✅ Docker version:'
   docker --version
+  echo '🔧 Installing Docker Buildx (arm64)...'
+  mkdir -p ~/.docker/cli-plugins
+  curl -SL https://github.com/docker/buildx/releases/download/v0.11.2/buildx-v0.11.2.linux-arm64 -o ~/.docker/cli-plugins/docker-buildx
+  chmod +x ~/.docker/cli-plugins/docker-buildx
+  echo '✅ Docker Buildx version:'
+  docker buildx version
   echo '☁️ Installing AWS CLI...'
   curl \"https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip\" -o \"awscliv2.zip\"
   unzip awscliv2.zip

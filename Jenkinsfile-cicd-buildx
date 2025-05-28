@@ -1,0 +1,92 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION   = 'us-east-1'
+        ECR_REPO     = '141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp'
+        IMAGE_TAG    = "v${BUILD_NUMBER}"
+        FULL_IMAGE   = "${ECR_REPO}:${IMAGE_TAG}"
+    }
+
+    stages {
+        stage('Setup Docker Buildx') {
+            steps {
+                sh '''
+                    echo "⚙️ Setting up Docker Buildx builder"
+                    docker buildx create --name arm64builder --use || docker buildx use arm64builder
+                    docker buildx inspect --bootstrap
+                '''
+            }
+        }
+
+        stage('Login to Amazon ECR') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-creds',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh '''
+                        mkdir -p ~/.aws
+                        echo "[default]" > ~/.aws/credentials
+                        echo "aws_access_key_id=$AWS_ACCESS_KEY_ID" >> ~/.aws/credentials
+                        echo "aws_secret_access_key=$AWS_SECRET_ACCESS_KEY" >> ~/.aws/credentials
+                        echo "[default]" > ~/.aws/config
+                        echo "region=$AWS_REGION" >> ~/.aws/config
+
+                        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPO
+                    '''
+                }
+            }
+        }
+
+        stage('Create ECR Repository if not exists') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-creds',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh '''
+                        aws ecr describe-repositories --repository-names date-time-webapp --region $AWS_REGION || \
+                        aws ecr create-repository --repository-name date-time-webapp --region $AWS_REGION
+                        echo "✅ ECR repository is ready"
+                    '''
+                }
+            }
+        }
+
+        stage('Build and Push Docker Image') {
+            steps {
+                sh '''
+                    echo "🚧 Building and pushing Docker image with buildx: $FULL_IMAGE"
+                    docker buildx build --platform linux/arm64 \
+                        -t $ECR_REPO:$IMAGE_TAG \
+                        -t $ECR_REPO:latest \
+                        --push ./app
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '🎉 CI pipeline completed successfully!'
+            slackSend (
+                color: '#36a64f',
+                message: "*✅ CI SUCCESS*: Docker image pushed for `${env.JOB_NAME}` #${env.BUILD_NUMBER} 🚀"
+            )
+        }
+        failure {
+            echo '❌ CI pipeline failed.'
+            slackSend (
+                color: '#FF0000',
+                message: "*❌ CI FAILURE*: Docker build or push failed in `${env.JOB_NAME}` #${env.BUILD_NUMBER} 🔧"
+            )
+        }
+        cleanup {
+            echo '🧹 Cleaning CI workspace...'
+            deleteDir()
+        }
+    }
+}
