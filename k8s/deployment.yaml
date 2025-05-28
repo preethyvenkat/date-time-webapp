@@ -15,12 +15,9 @@ spec:
       labels:
         app: date-time
         env: prod
-  spec:
-    container:
-    - name: date-time-container
-      image: 141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp:latest
-      ports:
-      - containerPort: 8080
-
-
-
+    spec:  
+      containers:
+        - name: date-time-container
+          image: 141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp:latest
+          ports:
+            - containerPort: 8080
