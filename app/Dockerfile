@@ -1,4 +1,4 @@
-FROM python:3.13.3-slim
+FROM --platform=linux/arm64 python:3.10-slim
 
 WORKDIR /app
 COPY . .
