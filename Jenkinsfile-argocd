@@ -7,14 +7,14 @@ pipeline {
         MANIFEST_REPO    = 'git@github.com:preethyvenkat/date-time-webapp.git'
         ARGO_APP_NAME    = 'date-time-webapp'
         ARGO_NAMESPACE   = 'argocd'
-        SSH_DEPLOY_KEY   = 'argo-ssh-key'      // Jenkins SSH key for ArgoCD secret
+        SSH_DEPLOY_KEY   = 'argocd-ssh-key'      // Jenkins SSH key for ArgoCD secret
         SSH_GIT_KEY      = 'github-creds'      // Jenkins SSH key for git push/pull
         ECR_REPO         = '141409473062.dkr.ecr.us-east-1.amazonaws.com/date-time-webapp'
         IMAGE_TAG        = "v${BUILD_NUMBER}"
     }
 
     stages {
-        stage('Setup kubeconfig for EKS') {
+       /* stage('Setup kubeconfig for EKS') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                     sh '''
@@ -42,14 +42,18 @@ pipeline {
                     kubectl rollout status deployment/argocd-server -n $ARGO_NAMESPACE --timeout=300s
                 '''
             }
-        }
+        } */
 
         stage('Configure Argo CD Git Access') {
             steps {
-                withCredentials([file(credentialsId: SSH_DEPLOY_KEY, variable: 'SSH_KEY')]) {
+                withCredentials([string(credentialsId: 'argocd-ssh-key', variable: 'SSH_KEY_CONTENT')]) {
                     sh '''
+                        echo "$SSH_KEY_CONTENT" > /tmp/argo_cd_key
+                        chmod 600 /tmp/argo_cd_key
                         kubectl -n $ARGO_NAMESPACE delete secret argocd-ssh-key || true
-                        kubectl -n $ARGO_NAMESPACE create secret generic argocd-ssh-key --from-file=ssh-privatekey=$SSH_KEY --type=kubernetes.io/ssh-auth
+                        kubectl -n $ARGO_NAMESPACE create secret generic argocd-ssh-key \
+                        --from-file=ssh-privatekey=/tmp/argo_cd_key \
+                        --type=kubernetes.io/ssh-auth
                     '''
                 }
             }
